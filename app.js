@@ -25,7 +25,7 @@ io.on('connection', function(socket) {
 
     var socket = ss(socket);
 
-    var basic = (action, containers) => {
+    var basic = (action, containers, callback) => {
         if (!containers) {
             return socket.emit('docker_conteiners_' + action, null)
         }
@@ -37,25 +37,25 @@ io.on('connection', function(socket) {
         var dockerContent = [];
 
         containers.forEach(function(container) {
-            docker.getContainer(container.Id)[action]((err, data) => {
+            var id = container.Id || container.id
+            docker.getContainer(id)[action]((err, data) => {
                 if (err) {
-                    socket.emit('docker_conteiners_' + action, null)
+                    callback(err, null)
                     return console.error(err)
                 }
 
-                if (dockerContent.indexOf(container.Id) == -1) {
-                    dockerContent.push(container.Id)
-                    if (action != 'inspect') {
-                        docker.getContainer(container.Id).inspect((err, data) => {
+                if (dockerContent.indexOf(id) == -1) {
+                    dockerContent.push(id)
+                    if (action != 'inspect' && action != 'remove') {
+                        docker.getContainer(id).inspect((err, data) => {
                             if (err) {
-                                socket.emit('docker_conteiners_' + action, null)
-                                return console.error(err)
+                                return callback(err, null)
                             }
 
-                            socket.emit('docker_conteiners_' + action, data)
+                            return callback(null, data)
                         })
                     } else {
-                        socket.emit('docker_conteiners_' + action, data)
+                        return callback(null, data)
                     }
                 }
             });
@@ -63,36 +63,60 @@ io.on('connection', function(socket) {
     }
 
     socket
-        .on('docker_create_conteiner', (optsc) => {
-            docker.createContainer(options,
+        .on('hello', (ev) => {
+            socket.emit(ev, new Date().getTime())
+        })
+        .on('docker_create_conteiner', (ev, optsc) => {
+            docker.createContainer(optsc,
                 function(err, container) {
                     if (err) {
                         return console.error(err)
                     }
 
+                    basic('inspect', container, (err, inspect) => {
+                        socket.emit(ev, err || inspect)
+                    });
+
                     container.start(function(err, data) {
                         if (err) {
                             return console.error(err)
                         }
-                        console.log(data)
                     });
                 });
         })
-        .on('docker_list_conteiners', (all = false) => {
-            docker.listContainers({
-                all
-            }, function(err, containers) {
-                socket.emit('docker_list_conteiners', containers)
+        .on('docker_conteiners_remove', (ev, containers) => {
+            basic('remove', containers, (err) => {
+                socket.emit(ev, err || true)
             });
         })
-        .on('docker_conteiners_inspect', (containers) => {
-            basic('inspect', containers);
+        .on('docker_list_conteiners', (ev, all) => {
+            docker.listContainers(all, function(err, containers) {
+                socket.emit(ev, containers)
+            });
         })
-        .on('docker_conteiners_stop', (containers) => {
-            basic('stop', containers);
+        .on('docker_list_images', (ev) => {
+            docker.listImages((err, images) => {
+                socket.emit(ev, images)
+            })
         })
-        .on('docker_conteiners_start', (containers) => {
-            basic('start', containers);
+        .on('docker_conteiners_inspect', (ev, containers) => {
+            basic('inspect', containers, (err, data) => {
+                socket.emit(ev, err || data)
+            });
+        })
+        .on('docker_conteiners_stop', (ev, containers) => {
+            basic('stop', containers, (err, data) => {
+                basic('inspect', containers, (err, data) => {
+                    socket.emit(ev, err || data)
+                });
+            });
+        })
+        .on('docker_conteiners_start', (ev, containers) => {
+            basic('start', containers, (err, data) => {
+                basic('inspect', containers, (err, data) => {
+                    socket.emit(ev, err || data)
+                });
+            });
         })
         .on('docker_pull', function(repoTag) {
             console.log('Pull ', repoTag)
